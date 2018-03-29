@@ -18,7 +18,7 @@ instances:
     type: obj
     size: 4096
     repeat: expr
-    repeat-expr: block_count  # '(block_count < 300 ? block_count : 300)'
+    repeat-expr: '(block_count < 300 ? block_count : 300)'
 #  random_block:
 #    pos: 0 * msb.block_size # enter block number here to jump directly that block in the WebIDE
 #    type: obj               # opens a sub stream for making positioning inside the block work
@@ -171,10 +171,16 @@ types:
         repeat: expr
         repeat-expr: entry_count
     instances:
+      has_footer:
+        value: (node_type & 1) != 0
       footer:
         pos: _root.block_size - 40
         type: node_footer
-        if: (node_type & 1) != 0
+        if: has_footer
+      key_length_for_node_type:
+        value: '(node_type & 4 != 0) ? 16 : 0'
+      record_length_for_node_type:
+        value: '(node_type & 4 != 0) ? ((node_type & 2 != 0) ? 16 : 8) : 0'
 
   full_entry_header:
     seq:
@@ -232,18 +238,18 @@ types:
       key:
         pos: header.key_offset + _parent.keys_offset + 56
         #TODO: Still missing fallback for when there is no footer.
-        size: 'header.has_lengths ? header.key_length : _parent.footer.key_length'
+        size: 'header.has_lengths ? header.key_length : _parent.has_footer ? _parent.footer.key_length : _parent.key_length_for_node_type'
         type:
-          switch-on: '(((_parent.node_type & 2) == 0) ? 256 : 0) + _parent._parent.hdr.o_subtype.to_i * (((_parent.node_type & 2) == 0) ? 0 : 1)'
+          switch-on: _parent._parent.hdr.o_subtype
           cases:
-            obj_subtype::history.to_i: history_key
-            obj_subtype::location.to_i: location_key
-            obj_subtype::files.to_i: file_key
+            obj_subtype::history: history_key
+            obj_subtype::location: location_key
+            obj_subtype::files: file_key
         -webide-parse-mode: eager
       val:
         pos: _root.block_size - header.data_offset - 40 * (_parent.node_type & 1)
         #TODO: Still missing fallback for when there is no footer.
-        size: 'header.has_lengths ? header.data_length : _parent.footer.data_length'
+        size: 'header.has_lengths ? header.data_length : _parent.has_footer ? _parent.footer.data_length : _parent.record_length_for_node_type'
         type:
           switch-on: '((_parent.node_type & 2) == 0) ? 256 : _parent._parent.hdr.o_subtype.to_i'
           cases:
@@ -345,6 +351,7 @@ types:
         pos: 'second_byte != 0 ? 4 : 2'
         size: name_length
         type: strz
+        -webide-parse-mode: eager
     -webide-representation: '"{dirname}"'
 
   hardlink_key:
@@ -361,9 +368,11 @@ types:
 
 ## node entry records
 
+  # TODO: pointer_record references an OID, but you have to look that up
+  #       in the LOCATION table to get the actual block number.
   pointer_record: # for any index nodes
     seq:
-      - id: pointer
+      - id: obj_id
         type: u8
     -webide-representation: '-> {pointer:dec}'
 
@@ -454,7 +463,7 @@ types:
 
   t6_record: # 0x60
     seq:
-      - id: unknown_0    #TODO: seems to contain 0x1 always, and the record is only present for non-empty files.
+      - id: unknown_0
         type: u4
     -webide-representation: '{unknown_0}'
 
@@ -695,7 +704,7 @@ enums:
     0x3: basicattr
     0x4: extattr
     0x5: hardlink
-    0x6: entry6
+    0x6: entry6    #TODO: seems to contain 0x1 for non-empty files? Or >0?
     0x8: extent
     0x9: direntry
     0xc: hardlinkback
