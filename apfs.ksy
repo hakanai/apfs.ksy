@@ -5,22 +5,24 @@ meta:
   endian: le
 
 seq:
-  - id: block0
+  - id: msb
     type: obj
     size: 4096
-  - id: blocks
+instances:
+  block_size:
+    value: msb.body.as<container_superblock>.block_size
+  block_count:
+    value: msb.body.as<container_superblock>.block_count
+  blocks:
+    pos: 0
     type: obj
     size: 4096
     repeat: expr
-    repeat-expr: 2000
-
-instances:
-  block_size:
-    value: _root.block0.body.as<container_superblock>.block_size
+    repeat-expr: block_count  # '(block_count < 300 ? block_count : 300)'
 #  random_block:
-#    pos: 0 * block_size   # enter block number here to jump directly that block in the WebIDE
-#    type: block           # opens a sub stream for making positioning inside the block work
-#    size: block_size
+#    pos: 0 * msb.block_size # enter block number here to jump directly that block in the WebIDE
+#    type: obj               # opens a sub stream for making positioning inside the block work
+#    size: msb.block_size
 
 types:
 
@@ -84,7 +86,7 @@ types:
             obj_type::btree: btree
             obj_type::checkpoint: checkpoint
             obj_type::volume_superblock: volume_superblock
-    -webide-representation: '{hdr.o_type}'
+    -webide-representation: '{hdr.o_type} ({hdr.o_subtype})'
             
 
 # container_superblock (type: 0x01)
@@ -109,11 +111,25 @@ types:
       - id: next_version
         type: u8
       - id: unknown_104
-        size: 32
-      - id: previous_container_superblock_block
         type: u4
-      - id: unknown_140
-        size: 12
+      - id: unknown_108
+        type: u4
+      - id: superblock_area_start
+        type: u8
+      - id: spaceman_area_start
+        type: u8
+      - id: next_superblock_from_area_start
+        type: u4
+      - id: next_spaceman_from_area_start
+        type: u4
+      - id: current_superblock_from_area_start
+        type: u4
+      - id: current_superblock_length
+        type: u4
+      - id: current_spaceman_from_area_start
+        type: u4
+      - id: current_spaceman_length
+        type: u4
       - id: space_manager_id
         type: u8
       - id: object_map_block
@@ -154,6 +170,11 @@ types:
         type: node_entry
         repeat: expr
         repeat-expr: entry_count
+    instances:
+      footer:
+        pos: _root.block_size - 40
+        type: node_footer
+        if: (node_type & 1) != 0
 
   full_entry_header:
     seq:
@@ -172,12 +193,34 @@ types:
         type: s2
       - id: key_length
         type: u2
-        if: (_parent._parent.node_type & 4) == 0
+        if: has_lengths
       - id: data_offset
         type: s2
       - id: data_length
         type: u2
-        if: (_parent._parent.node_type & 4) == 0
+        if: has_lengths
+    instances:
+      has_lengths:
+        value: (_parent._parent.node_type & 4) == 0
+
+  node_footer:
+    seq:
+      - id: unknown_0
+        type: u4
+      - id: unknown_4
+        type: u4
+      - id: key_length
+        type: u4
+      - id: data_length
+        type: u4
+      - id: max_key_length
+        type: u4
+      - id: max_data_length
+        type: u4
+      - id: total_entry_count_for_branch
+        type: u8
+      - id: next_record_number
+        type: u8
 
 ## node entries
 
@@ -188,54 +231,80 @@ types:
     instances:
       key:
         pos: header.key_offset + _parent.keys_offset + 56
-        type: key
+        #TODO: Still missing fallback for when there is no footer.
+        size: 'header.has_lengths ? header.key_length : _parent.footer.key_length'
+        type:
+          switch-on: '(((_parent.node_type & 2) == 0) ? 256 : 0) + _parent._parent.hdr.o_subtype.to_i * (((_parent.node_type & 2) == 0) ? 0 : 1)'
+          cases:
+            obj_subtype::history.to_i: history_key
+            obj_subtype::location.to_i: location_key
+            obj_subtype::files.to_i: file_key
         -webide-parse-mode: eager
       val:
         pos: _root.block_size - header.data_offset - 40 * (_parent.node_type & 1)
+        #TODO: Still missing fallback for when there is no footer.
+        size: 'header.has_lengths ? header.data_length : _parent.footer.data_length'
         type:
-          switch-on: '(((_parent.node_type & 2) == 0) ? 256 : 0) + key.record_type.to_i * (((_parent.node_type & 2) == 0) ? 0 : 1)'
+          switch-on: '((_parent.node_type & 2) == 0) ? 256 : _parent._parent.hdr.o_subtype.to_i'
           cases:
             256: pointer_record # applies to all pointer records, i.e. any entry val in index nodes
-            record_type::location.to_i: location_record
-            record_type::inode.to_i: inode_record
-            record_type::name.to_i: named_record
-            record_type::thread.to_i: thread_record
-            record_type::hardlink.to_i: hardlink_record
-            record_type::entry6.to_i: t6_record
-            record_type::extent.to_i: extent_record
-            record_type::entry12.to_i: t12_record
-            record_type::extattr.to_i: extattr_record
+            obj_subtype::location.to_i: location_record
+            obj_subtype::history.to_i: history_record
+            obj_subtype::files.to_i: file_record
         -webide-parse-mode: eager
     -webide-representation: '{key}: {val}'
 
 ## node entry keys
 
-  key:
+  file_key:
     seq:
       - id: key_low # this is a work-around for JavaScript's inability to hande 64 bit values
         type: u4
       - id: key_high
         type: u4
       - id: content
-        #size: _parent.header.key-8_length
+        size: _parent.header.key_length - 8
         type:
           switch-on: record_type
           cases:
-            record_type::location: location_key
+            record_type::direntry: named_key
             record_type::inode: inode_key
-            record_type::name: named_key
+            record_type::basicattr: basic_key
+            record_type::entry6: basic_key
             record_type::hardlink: hardlink_key
+            record_type::hardlinkback: basic_key
             record_type::extattr: named_key
             record_type::extent: extent_key
     instances:
-      key_value:
+      node_id:
         value: key_low + ((key_high & 0x0FFFFFFF) << 32)
         -webide-parse-mode: eager
       record_type:
         value: key_high >> 28
         enum: record_type
         -webide-parse-mode: eager
-    -webide-representation: '({record_type}) {key_value:dec} {content}'
+    -webide-representation: '({record_type}) {node_id:dec} {content}'
+
+  basic_key:
+    -webide-representation: ''
+
+  file_record:
+    instances:
+      value:
+        type:
+          switch-on: _parent.key.as<file_key>.record_type
+          cases:
+            record_type::direntry: direntry_record
+            record_type::inode: inode_record
+            record_type::basicattr: basicattr_record
+            record_type::hardlink: hardlink_record
+            record_type::entry6: t6_record
+            record_type::extent: extent_record
+            record_type::hardlinkback: hardlinkback_record
+            record_type::extattr: extattr_record
+        size-eos: true
+        -webide-parse-mode: eager
+    -webide-representation: '{value}'
 
   location_key:
     seq:
@@ -263,12 +332,17 @@ types:
     seq:
       - id: name_length
         type: u1
-      - id: flag_1
+      - id: second_byte
         type: u1
-      - id: unknown_2
-        type: u2
-        if: flag_1 != 0
-      - id: dirname
+    instances:
+      hash:
+        type: u4
+        pos: 0
+        # TODO Technically you're supposed to look at the volume header,
+        #      so this condition will occasionally be wrong.
+        if: second_byte != 0
+      dirname:
+        pos: 'second_byte != 0 ? 4 : 2'
         size: name_length
         type: strz
     -webide-representation: '"{dirname}"'
@@ -293,7 +367,7 @@ types:
         type: u8
     -webide-representation: '-> {pointer:dec}'
 
-  history_record: # ???
+  history_record:
     seq:
       - id: unknown_0
         type: u4
@@ -311,7 +385,7 @@ types:
         type: ref_obj
     -webide-representation: '{obj_id}, from {block_start:dec}, len {block_length:dec}'
 
-  thread_record: # 0x30
+  basicattr_record: # 0x30
     seq:
       - id: parent_id
         type: u8
@@ -355,9 +429,12 @@ types:
         type: u2
       - id: name_length
         type: u2
-      - id: name_filler
+      - id: name_filler_1
         type: u4
-        if: filler_flag == 2
+        if: filler_flag >= 2
+      - id: name_filler_2
+        type: u4
+        if: filler_flag >= 3
       - id: name
         type: strz
       - id: unknown_remainder
@@ -377,7 +454,7 @@ types:
 
   t6_record: # 0x60
     seq:
-      - id: unknown_0
+      - id: unknown_0    #TODO: seems to contain 0x1 always, and the record is only present for non-empty files.
         type: u4
     -webide-representation: '{unknown_0}'
 
@@ -405,22 +482,22 @@ types:
         type: u8
     -webide-representation: '{obj_id}, Len {size:dec}, {unknown_16:dec}'
 
-  named_record: # 0x90
+  direntry_record: # 0x90
     seq:
       - id: node_id
         type: u8
       - id: timestamp
         type: u8
-      - id: item_length
+      - id: item_type
         type: u2
         enum: item_type
     -webide-representation: '#{node_id:dec}, {item_type}'
 
-  t12_record: # 0xc0
+  hardlinkback_record: # 0xc0
     seq:
-      - id: unknown_0
+      - id: node_id
         type: u8
-    -webide-representation: '{unknown_0:dec}'
+    -webide-representation: '#{node_id:dec}'
 
   extattr_record: # 0x40
     seq:
@@ -565,22 +642,37 @@ types:
       - id: unknown_152_blk
         type: ref_obj
       - id: unknown_160
-        size: 80
+        size: 16
+      - id: next_catalog_node_id
+        type: u8
+      - id: total_file_count
+        type: u8
+      - id: total_folder_count
+        type: u8
+      - id: unknown_200
+        size: 40
       - id: volume_guid
         size: 16
       - id: time_updated
         type: u8
       - id: unknown_264
         type: u8
-      - id: created_by
-        size: 32
-        type: strz
-      - id: time_created
-        type: u8
-      - id: unknown_312
-        size: 392
+      - id: access_history
+        type: volume_access_info
+        repeat: expr
+        repeat-expr: 9
       - id: volume_name
         type: strz
+
+  volume_access_info:
+    seq:
+      - id: accessed_by
+        size: 32
+        type: strz
+      - id: time_accessed
+        type: u8
+      - id: version
+        type: u8
 
 # enums
 
@@ -600,13 +692,13 @@ enums:
   record_type:
     0x0: location
     0x2: inode
-    0x3: thread
+    0x3: basicattr
     0x4: extattr
     0x5: hardlink
     0x6: entry6
     0x8: extent
-    0x9: name
-    0xc: entry12
+    0x9: direntry
+    0xc: hardlinkback
 
   obj_subtype:
     0: empty
