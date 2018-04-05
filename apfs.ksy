@@ -20,9 +20,9 @@ instances:
     repeat: expr
     repeat-expr: '(block_count < 300 ? block_count : 300)'
 #  random_block:
-#    pos: 0 * msb.block_size # enter block number here to jump directly that block in the WebIDE
+#    pos: 0 * block_size # enter block number here to jump directly that block in the WebIDE
 #    type: obj               # opens a sub stream for making positioning inside the block work
-#    size: msb.block_size
+#    size: block_size
 
 types:
 
@@ -251,7 +251,7 @@ types:
         #TODO: Still missing fallback for when there is no footer.
         size: 'header.has_lengths ? header.data_length : _parent.has_footer ? _parent.footer.data_length : _parent.record_length_for_node_type'
         type:
-          switch-on: '((_parent.node_type & 2) == 0) ? 256 : _parent._parent.hdr.o_subtype.to_i'
+          switch-on: '(_parent.level > 0) ? 256 : _parent._parent.hdr.o_subtype.to_i'
           cases:
             256: pointer_record # applies to all pointer records, i.e. any entry val in index nodes
             obj_subtype::location.to_i: location_record
@@ -368,8 +368,8 @@ types:
 
 ## node entry records
 
-  # TODO: pointer_record references an OID, but you have to look that up
-  #       in the LOCATION table to get the actual block number.
+  # Pointer records sometimes refer to object IDs and sometimes refer
+  # directly to block numbers.
   pointer_record: # for any index nodes
     seq:
       - id: obj_id
@@ -430,25 +430,37 @@ types:
         type: u4
       - id: unknown_88
         type: u4
-      - id: filler_flag
+      - id: detail_count
         type: u2
-      - id: unknown_94
+      - id: detail_length
         type: u2
-      - id: unknown_96
+      - id: detail_headers
+        type: basicattr_detail_header
+        repeat: expr
+        repeat-expr: detail_count
+      - id: detail_values
+        type:
+          switch-on: detail_headers[_index].type
+          cases:
+            basicattr_detail_type::name: basicattr_detail_name
+        size: detail_headers[_index].length
+        repeat: expr
+        repeat-expr: detail_count
+    -webide-representation: '#{node_id:dec} / #{parent_id:dec}'
+
+  basicattr_detail_header:
+    seq:
+      - id: type
         type: u2
-      - id: name_length
+        enum: basicattr_detail_type
+      - id: length
         type: u2
-      - id: name_filler_1
-        type: u4
-        if: filler_flag >= 2
-      - id: name_filler_2
-        type: u4
-        if: filler_flag >= 3
+  
+  basicattr_detail_name:
+    seq:
       - id: name
         type: strz
-      - id: unknown_remainder
         size-eos: true
-    -webide-representation: '#{node_id:dec} / #{parent_id:dec} "{name}"'
 
   hardlink_record: # 0x50
     seq:
@@ -718,10 +730,21 @@ enums:
     16: unknown3
 
   item_type:
+    1: named_pipe
+    2: character_device
     4: folder
+    6: block_device
     8: file
     10: symlink
+    12: socket
 
+  basicattr_detail_type:
+    0x0204: name
+    0x2008: sizes
+    0x280d: unknown_280d
+    0x220e: device_node
+  
   ea_type:
     2: generic
     6: symlink
+  
