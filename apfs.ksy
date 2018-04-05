@@ -86,7 +86,7 @@ types:
             obj_type::btree: btree
             obj_type::checkpoint: checkpoint
             obj_type::volume_superblock: volume_superblock
-    -webide-representation: '{hdr.type}'
+    -webide-representation: '{hdr.type} ({hdr.subtype})'
 
 
 # container_superblock (type: 0x01)
