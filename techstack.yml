@@ -1,0 +1,20 @@
+repo_name: hakanai/apfs.ksy
+report_id: 22bd1ad2207ae567c96048d08e6900c7
+version: 0.1
+repo_type: Public
+timestamp: '2024-02-11T01:34:04+00:00'
+requested_by: hakanai
+provider: github
+branch: master
+detected_tools_count: 1
+tools:
+- name: Git
+  description: Fast, scalable, distributed revision control system
+  website_url: http://git-scm.com/
+  open_source: true
+  hosted_saas: false
+  category: Build, Test, Deploy
+  sub_category: Version Control System
+  image_url: https://img.stackshare.io/service/1046/git.png
+  detection_source_url: https://github.com/hakanai/apfs.ksy
+  detection_source: Repo Metadata
